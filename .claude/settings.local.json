@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm:*)",
+      "Bash(mv:*)",
+      "Bash(cp:*)",
+      "Bash(tree:*)",
+      "Bash(psql:*)",
+      "Bash(brew services:*)",
+      "Bash(npm run setup-db:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm install:*)",
+      "Bash(curl:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
