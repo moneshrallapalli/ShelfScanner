@@ -15,6 +15,20 @@ const preferencesRouter = require('./routes/preferences');
 const uploadsRouter = require('./routes/uploads');
 const recommendationsRouter = require('./routes/recommendations');
 const booksRouter = require('./routes/books');
+const adminRouter = require('./routes/admin');
+const testRouter = require('./routes/test');
+const goodreadsRouter = require('./routes/goodreads');
+
+// Import error handling middleware
+const { 
+  errorLogger, 
+  errorHandler, 
+  notFoundHandler,
+  timeoutHandler,
+  rateLimitErrorHandler,
+  corsErrorHandler,
+  databaseErrorHandler
+} = require('./middleware/errorHandler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -52,6 +66,9 @@ app.use(session({
 // Custom session middleware
 app.use(sessionMiddleware());
 
+// Request timeout (30 seconds)
+app.use(timeoutHandler(30000));
+
 // Apply general rate limiting
 app.use('/api', rateLimit.general);
 
@@ -71,6 +88,9 @@ app.use('/api/preferences', preferencesRouter);
 app.use('/api/uploads', uploadsRouter);
 app.use('/api/recommendations', recommendationsRouter);
 app.use('/api/books', booksRouter);
+app.use('/api/admin', adminRouter);
+app.use('/api/test', testRouter);
+app.use('/api/goodreads', goodreadsRouter);
 
 // Welcome route
 app.get('/', (req, res) => {
@@ -83,18 +103,26 @@ app.get('/', (req, res) => {
       preferences: '/api/preferences',
       uploads: '/api/uploads',
       recommendations: '/api/recommendations',
-      books: '/api/books'
+      books: '/api/books',
+      admin: '/api/admin',
+      goodreads: '/api/goodreads'
     },
     documentation: 'https://github.com/yourusername/shelf-scanner'
   });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong!' });
-});
+// Error handling middleware (order is important!)
+app.use(corsErrorHandler);
+app.use(rateLimitErrorHandler);
+app.use(databaseErrorHandler);
+app.use(errorLogger);
+app.use(notFoundHandler); // Must be before general error handler
+app.use(errorHandler);
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Shelf Scanner API server running on port ${PORT}`);
+  console.log(`🌐 API available at: http://localhost:${PORT}`);
+  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`🔧 Admin panel: http://localhost:${PORT}/api/admin/stats`);
+  console.log(`📚 AI Services: ${process.env.OPENAI_API_KEY ? '✅ OpenAI' : '❌ OpenAI'} | ${process.env.GOOGLE_VISION_API_KEY ? '✅ Google Vision' : '❌ Google Vision'}`);
 });

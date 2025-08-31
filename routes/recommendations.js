@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { getSession } = require('../utils/sessionUtils');
 const { recommendation } = require('../middleware/rateLimitMiddleware');
+const recommendationEngine = require('../services/recommendationEngine');
+const { findById, insertOne, query } = require('../utils/database');
 
 // Apply recommendation-specific rate limiting
 router.use(recommendation);
@@ -21,59 +23,107 @@ router.post('/generate', async (req, res) => {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
-    const { imageId, preferences } = req.body;
+    const { imageId, uploadId, preferences = {}, options = {} } = req.body;
     
-    if (!imageId) {
-      return res.status(400).json({ error: 'Image ID required for recommendations' });
+    if (!imageId && !uploadId) {
+      return res.status(400).json({ error: 'Image ID or Upload ID required for recommendations' });
     }
 
-    // Placeholder for AI recommendation logic
-    // In Day 3, this will integrate with OpenAI Vision API and book recommendation logic
-    
-    const mockRecommendations = [
-      {
-        id: '1',
-        title: 'The Seven Husbands of Evelyn Hugo',
-        author: 'Taylor Jenkins Reid',
-        isbn: '9781501161933',
-        genre: 'Historical Fiction',
-        rating: 4.5,
-        description: 'A captivating novel about a reclusive Hollywood icon who finally decides to tell her story.',
-        reason: 'Based on similar contemporary fiction in your bookshelf',
-        confidence: 0.85,
-        coverUrl: 'https://example.com/cover1.jpg'
-      },
-      {
-        id: '2',
-        title: 'Where the Crawdads Sing',
-        author: 'Delia Owens',
-        isbn: '9780735219090',
-        genre: 'Mystery Fiction',
-        rating: 4.3,
-        description: 'A mystery and coming-of-age story set in the marshes of North Carolina.',
-        reason: 'Matches your preference for nature-themed literature',
-        confidence: 0.78,
-        coverUrl: 'https://example.com/cover2.jpg'
-      }
-    ];
+    // Get detected books from upload
+    let detectedBooks = [];
+    let uploadRecord = null;
 
-    // Log the recommendation request
-    console.log(`Recommendations generated for session ${sessionId}, image: ${imageId}`);
+    if (uploadId) {
+      uploadRecord = await findById('image_uploads', uploadId);
+      if (!uploadRecord) {
+        return res.status(404).json({ error: 'Upload not found' });
+      }
+
+      // Check ownership
+      if (uploadRecord.session_id !== sessionId) {
+        return res.status(403).json({ error: 'Access denied' });
+      }
+
+      if (uploadRecord.processing_status !== 'completed') {
+        return res.status(400).json({ 
+          error: 'Image not yet processed. Please analyze the image first.',
+          status: uploadRecord.processing_status
+        });
+      }
+
+      detectedBooks = uploadRecord.extracted_books || [];
+    }
+
+    if (detectedBooks.length === 0) {
+      return res.status(400).json({ 
+        error: 'No books detected in the uploaded image. Please ensure the image contains visible book spines.' 
+      });
+    }
+
+    // Get user preferences from database
+    const userPrefsResult = await query(
+      'SELECT content_preferences, favorite_genres, preferred_authors FROM user_preferences WHERE session_id = $1',
+      [sessionId]
+    );
+
+    const dbPreferences = userPrefsResult.rows[0] || {};
+    const combinedPreferences = {
+      ...dbPreferences,
+      ...preferences, // Request preferences override DB preferences
+      favoriteGenres: preferences.favoriteGenres || dbPreferences.favorite_genres || [],
+      preferredAuthors: preferences.preferredAuthors || dbPreferences.preferred_authors || []
+    };
+
+    console.log(`🎯 Generating AI recommendations for ${detectedBooks.length} detected books`);
+
+    // Generate AI-powered recommendations
+    const recommendationOptions = {
+      maxRecommendations: options.maxRecommendations || 10,
+      includeMetadata: options.includeMetadata !== false,
+      model: options.aiModel || 'gpt-4'
+    };
+
+    const aiRecommendations = await recommendationEngine.generateRecommendations(
+      detectedBooks,
+      combinedPreferences,
+      sessionId,
+      recommendationOptions
+    );
+
+    // Save recommendations to database
+    const recommendationRecord = await insertOne('recommendations', {
+      session_id: sessionId,
+      image_upload_id: uploadRecord?.id || null,
+      recommended_books: aiRecommendations.recommendations,
+      reasoning: aiRecommendations.explanations.why
+    });
+
+    console.log(`✅ Generated ${aiRecommendations.recommendations.length} AI recommendations for session ${sessionId}`);
 
     res.json({
       success: true,
-      recommendations: mockRecommendations,
+      recommendations: aiRecommendations.recommendations,
+      readingProfile: aiRecommendations.readingProfile,
+      explanations: aiRecommendations.explanations,
       metadata: {
-        imageId: imageId,
-        generatedAt: new Date().toISOString(),
-        totalRecommendations: mockRecommendations.length,
-        averageConfidence: mockRecommendations.reduce((sum, rec) => sum + rec.confidence, 0) / mockRecommendations.length,
-        sessionId: sessionId
+        ...aiRecommendations.metadata,
+        recommendationId: recommendationRecord.id,
+        uploadId: uploadRecord?.id || null,
+        basedOnBooks: detectedBooks.map(book => ({ 
+          title: book.title, 
+          author: book.author, 
+          confidence: book.confidence 
+        }))
       }
     });
+
   } catch (error) {
-    console.error('Recommendation generation error:', error);
-    res.status(500).json({ error: 'Failed to generate recommendations' });
+    console.error('AI recommendation generation error:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate recommendations',
+      details: error.message,
+      type: error.name
+    });
   }
 });
 

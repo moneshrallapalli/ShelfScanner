@@ -4,6 +4,8 @@ const path = require('path');
 const fs = require('fs');
 const router = express.Router();
 const { getSession } = require('../utils/sessionUtils');
+const bookSpineRecognition = require('../services/bookSpineRecognition');
+const { insertOne, findById, updateById } = require('../utils/database');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -61,7 +63,7 @@ router.post('/bookshelf', async (req, res) => {
     }
 
     // Use multer middleware for single file upload
-    upload.single('bookshelf')(req, res, function (err) {
+    upload.single('bookshelf')(req, res, async function (err) {
       if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
           return res.status(400).json({ error: 'File too large. Maximum size is 10MB.' });
@@ -81,31 +83,48 @@ router.post('/bookshelf', async (req, res) => {
         return res.status(400).json({ error: 'No file uploaded' });
       }
 
-      // File upload successful
-      const fileInfo = {
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        mimetype: req.file.mimetype,
-        size: req.file.size,
-        path: req.file.path,
-        uploadedAt: new Date().toISOString(),
-        sessionId: sessionId
-      };
+      try {
+        // File upload successful
+        const fileInfo = {
+          session_id: sessionId,
+          filename: req.file.filename,
+          file_path: req.file.path,
+          file_size: req.file.size,
+          mime_type: req.file.mimetype,
+          processing_status: 'uploaded'
+        };
 
-      // In a real implementation, you would save file info to database
-      console.log('File uploaded:', fileInfo);
+        // Save upload info to database
+        const uploadRecord = await insertOne('image_uploads', fileInfo);
+        
+        console.log('File uploaded and recorded:', uploadRecord.id);
 
-      res.status(201).json({
-        success: true,
-        message: 'Bookshelf image uploaded successfully',
-        file: {
-          id: fileInfo.filename, // Use filename as ID for now
-          originalName: fileInfo.originalName,
-          size: fileInfo.size,
-          type: fileInfo.mimetype,
-          uploadedAt: fileInfo.uploadedAt
-        }
-      });
+        // Start AI processing in background
+        const processOptions = req.body.processImmediately === 'true' ? 
+          await processBookshelfImage(uploadRecord.id, req.file.path, sessionId) : null;
+
+        res.status(201).json({
+          success: true,
+          message: 'Bookshelf image uploaded successfully',
+          file: {
+            id: uploadRecord.id,
+            filename: req.file.filename,
+            originalName: req.file.originalname,
+            size: req.file.size,
+            type: req.file.mimetype,
+            uploadedAt: uploadRecord.created_at,
+            processingStatus: uploadRecord.processing_status
+          },
+          ...(processOptions && { processing: processOptions })
+        });
+
+      } catch (dbError) {
+        console.error('Database error during upload:', dbError);
+        res.status(500).json({ 
+          error: 'Upload successful but failed to record in database',
+          fileId: req.file.filename
+        });
+      }
     });
   } catch (error) {
     console.error('Upload error:', error);
@@ -241,5 +260,183 @@ router.get('/history', async (req, res) => {
     res.status(500).json({ error: 'Failed to retrieve upload history' });
   }
 });
+
+// Process bookshelf image with AI
+router.post('/:fileId/analyze', async (req, res) => {
+  try {
+    const sessionId = req.session.deviceSessionId;
+    const { fileId } = req.params;
+    
+    if (!sessionId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const session = await getSession(sessionId);
+    
+    if (!session) {
+      return res.status(401).json({ error: 'Invalid session' });
+    }
+
+    // Get upload record
+    const uploadRecord = await findById('image_uploads', fileId);
+    if (!uploadRecord) {
+      return res.status(404).json({ error: 'Upload not found' });
+    }
+
+    // Check ownership
+    if (uploadRecord.session_id !== sessionId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Check if already processed
+    if (uploadRecord.processing_status === 'completed') {
+      return res.json({
+        success: true,
+        message: 'Image already processed',
+        books: uploadRecord.extracted_books || [],
+        processingStatus: 'completed'
+      });
+    }
+
+    // Update status to processing
+    await updateById('image_uploads', fileId, { 
+      processing_status: 'processing',
+      processed_at: new Date()
+    });
+
+    // Start AI processing
+    const analysisOptions = {
+      includeAuthors: req.body.includeAuthors !== false,
+      includeGenres: req.body.includeGenres !== false,
+      maxResults: req.body.maxResults || 50,
+      minConfidence: req.body.minConfidence || 0.3,
+      enrichWithGoogleBooks: req.body.enrichWithGoogleBooks === true
+    };
+
+    console.log(`🔍 Starting AI analysis for upload ${fileId}`);
+    
+    const analysisResult = await bookSpineRecognition.recognizeBooks(
+      uploadRecord.file_path,
+      analysisOptions
+    );
+
+    // Update database with results
+    await updateById('image_uploads', fileId, {
+      processing_status: 'completed',
+      extracted_books: analysisResult.books
+    });
+
+    console.log(`✅ AI analysis completed for upload ${fileId}: ${analysisResult.books.length} books found`);
+
+    res.json({
+      success: true,
+      message: 'Bookshelf analysis completed',
+      analysis: analysisResult,
+      uploadId: fileId
+    });
+
+  } catch (error) {
+    console.error('AI analysis error:', error);
+    
+    // Update status to failed
+    try {
+      await updateById('image_uploads', req.params.fileId, {
+        processing_status: 'failed'
+      });
+    } catch (dbError) {
+      console.error('Failed to update processing status:', dbError);
+    }
+
+    res.status(500).json({ error: `AI analysis failed: ${error.message}` });
+  }
+});
+
+// Get extracted books from processed image
+router.get('/:fileId/books', async (req, res) => {
+  try {
+    const sessionId = req.session.deviceSessionId;
+    const { fileId } = req.params;
+    
+    if (!sessionId) {
+      return res.status(401).json({ error: 'No active session' });
+    }
+
+    const uploadRecord = await findById('image_uploads', fileId);
+    if (!uploadRecord) {
+      return res.status(404).json({ error: 'Upload not found' });
+    }
+
+    // Check ownership
+    if (uploadRecord.session_id !== sessionId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    if (uploadRecord.processing_status !== 'completed') {
+      return res.status(400).json({ 
+        error: 'Image not yet processed',
+        status: uploadRecord.processing_status
+      });
+    }
+
+    res.json({
+      success: true,
+      books: uploadRecord.extracted_books || [],
+      metadata: {
+        uploadId: uploadRecord.id,
+        processedAt: uploadRecord.processed_at,
+        totalBooks: uploadRecord.extracted_books?.length || 0
+      }
+    });
+
+  } catch (error) {
+    console.error('Get books error:', error);
+    res.status(500).json({ error: 'Failed to retrieve books' });
+  }
+});
+
+// Helper function for background processing
+async function processBookshelfImage(uploadId, imagePath, sessionId) {
+  try {
+    console.log(`🔄 Starting background processing for upload ${uploadId}`);
+    
+    const analysisResult = await bookSpineRecognition.recognizeBooks(imagePath, {
+      includeAuthors: true,
+      includeGenres: true,
+      maxResults: 50,
+      minConfidence: 0.3
+    });
+
+    // Update database with results
+    await updateById('image_uploads', uploadId, {
+      processing_status: 'completed',
+      extracted_books: analysisResult.books,
+      processed_at: new Date()
+    });
+
+    console.log(`✅ Background processing completed for upload ${uploadId}: ${analysisResult.books.length} books found`);
+
+    return {
+      status: 'completed',
+      booksFound: analysisResult.books.length,
+      processingTime: analysisResult.metadata.processingTime
+    };
+
+  } catch (error) {
+    console.error(`❌ Background processing failed for upload ${uploadId}:`, error);
+    
+    try {
+      await updateById('image_uploads', uploadId, {
+        processing_status: 'failed'
+      });
+    } catch (dbError) {
+      console.error('Failed to update failed status:', dbError);
+    }
+
+    return {
+      status: 'failed',
+      error: error.message
+    };
+  }
+}
 
 module.exports = router;
