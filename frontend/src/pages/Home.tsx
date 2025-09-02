@@ -1,6 +1,8 @@
 import React from 'react';
 import styled from 'styled-components';
 import { useNavigate } from 'react-router-dom';
+import Button from '../components/UI/Button';
+import { useAnalytics, usePageTracking } from '../services/analytics';
 
 const Container = styled.div`
   padding: 2rem;
@@ -25,29 +27,22 @@ const Subtitle = styled.p`
   line-height: 1.6;
 `;
 
-const Button = styled.button`
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  border: none;
-  padding: 1rem 2rem;
-  font-size: 1.1rem;
-  border-radius: 10px;
-  cursor: pointer;
-  margin: 0.5rem;
-  transition: transform 0.2s, box-shadow 0.2s;
-  
-  &:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-  }
-  
-  &:active {
-    transform: translateY(0);
-  }
-`;
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
+  const analyticsHook = useAnalytics();
+  
+  usePageTracking('home', 'Home - Shelf Scanner');
+
+  const handlePreferencesClick = () => {
+    analyticsHook.trackUserAction('navigate_to_preferences');
+    navigate('/preferences');
+  };
+
+  const handleScannerClick = () => {
+    analyticsHook.trackUserAction('navigate_to_scanner');
+    navigate('/scanner');
+  };
 
   return (
     <Container>
@@ -57,11 +52,11 @@ const Home: React.FC = () => {
         and get personalized recommendations based on your reading preferences.
       </Subtitle>
       
-      <Button onClick={() => navigate('/preferences')}>
+      <Button variant="primary" size="large" onClick={handlePreferencesClick}>
         Set Reading Preferences
       </Button>
       
-      <Button onClick={() => navigate('/scanner')}>
+      <Button variant="primary" size="large" onClick={handleScannerClick}>
         Scan Bookshelf
       </Button>
     </Container>

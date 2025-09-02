@@ -1,9 +1,12 @@
 import React from 'react';
 import styled from 'styled-components';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import GlobalStyles from './styles/GlobalStyles';
+import { ErrorBoundary } from './components/UI/ErrorStates';
 import Home from './pages/Home';
 import Preferences from './pages/Preferences';
 import Scanner from './pages/Scanner';
+import Recommendations from './pages/Recommendations';
 
 const AppContainer = styled.div`
   min-height: 100vh;
@@ -25,17 +28,23 @@ const AppContent = styled.div`
 
 function App() {
   return (
-    <AppContainer>
-      <AppContent>
-        <Router>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/preferences" element={<Preferences />} />
-            <Route path="/scanner" element={<Scanner />} />
-          </Routes>
-        </Router>
-      </AppContent>
-    </AppContainer>
+    <>
+      <GlobalStyles />
+      <ErrorBoundary>
+        <AppContainer>
+          <AppContent>
+            <Router>
+              <Routes>
+                <Route path="/" element={<Home />} />
+                <Route path="/preferences" element={<Preferences />} />
+                <Route path="/scanner" element={<Scanner />} />
+                <Route path="/recommendations" element={<Recommendations />} />
+              </Routes>
+            </Router>
+          </AppContent>
+        </AppContainer>
+      </ErrorBoundary>
+    </>
   );
 }
 

@@ -1,6 +1,11 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components';
 import { useNavigate } from 'react-router-dom';
+import { apiService, Book } from '../services/api';
+import Button from '../components/UI/Button';
+import { FullPageLoading, LoadingOverlay } from '../components/UI/LoadingStates';
+import { CameraError, UploadError, AnalysisError, NoBooksFoundError } from '../components/UI/ErrorStates';
+import { analytics, useAnalytics } from '../services/analytics';
 
 const Container = styled.div`
   padding: 1rem;
@@ -47,31 +52,6 @@ const CapturedImage = styled.img`
   margin-bottom: 1rem;
 `;
 
-const Button = styled.button<{ variant?: 'primary' | 'secondary' }>`
-  background: ${props => 
-    props.variant === 'secondary' 
-      ? 'transparent' 
-      : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-  };
-  color: ${props => props.variant === 'secondary' ? '#4a5568' : 'white'};
-  border: ${props => props.variant === 'secondary' ? '2px solid #e2e8f0' : 'none'};
-  padding: 1rem 2rem;
-  font-size: 1rem;
-  border-radius: 10px;
-  cursor: pointer;
-  margin: 0.5rem;
-  transition: transform 0.2s;
-  
-  &:hover {
-    transform: translateY(-2px);
-  }
-  
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-  }
-`;
 
 const ButtonRow = styled.div`
   display: flex;
@@ -88,6 +68,63 @@ const Instructions = styled.p`
   padding: 0 1rem;
 `;
 
+
+const SuccessMessage = styled.div`
+  background: #c6f6d5;
+  color: #2d7d32;
+  padding: 1rem;
+  border-radius: 8px;
+  margin: 1rem 0;
+  text-align: center;
+`;
+
+const BooksList = styled.div`
+  background: #f7fafc;
+  border-radius: 12px;
+  padding: 1rem;
+  margin: 1rem 0;
+`;
+
+const BookItem = styled.div`
+  background: white;
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin: 0.5rem 0;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+`;
+
+const BookInfo = styled.div`
+  flex: 1;
+`;
+
+const BookTitle = styled.div`
+  font-weight: bold;
+  color: #2d3748;
+  margin-bottom: 0.25rem;
+`;
+
+const BookAuthor = styled.div`
+  color: #4a5568;
+  font-size: 0.9rem;
+`;
+
+const ConfidenceBadge = styled.span<{ confidence: number }>`
+  background: ${props => 
+    props.confidence > 0.8 ? '#48bb78' : 
+    props.confidence > 0.6 ? '#ed8936' : '#e53e3e'
+  };
+  color: white;
+  padding: 0.25rem 0.5rem;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: bold;
+`;
+
+
+
 const Scanner: React.FC = () => {
   const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -97,12 +134,20 @@ const Scanner: React.FC = () => {
   const [isStreaming, setIsStreaming] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [detectedBooks, setDetectedBooks] = useState<Book[]>([]);
+  const [uploadId, setUploadId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [analysisComplete, setAnalysisComplete] = useState(false);
+  const [cameraError, setCameraError] = useState(false);
+  const [uploadError, setUploadError] = useState(false);
+  
+  const analyticsHook = useAnalytics();
 
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
-          facingMode: 'environment', // Use back camera on mobile
+          facingMode: 'environment',
           width: { ideal: 1920 },
           height: { ideal: 1080 }
         } 
@@ -111,12 +156,15 @@ const Scanner: React.FC = () => {
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setIsStreaming(true);
+        setCameraError(false);
+        analyticsHook.trackCameraUsage(true);
       }
     } catch (err) {
       console.error('Error accessing camera:', err);
-      alert('Unable to access camera. Please check permissions or use file upload.');
+      setCameraError(true);
+      analyticsHook.trackCameraUsage(false, err instanceof Error ? err.name : 'UnknownError');
     }
-  }, []);
+  }, [analyticsHook]);
 
   const stopCamera = useCallback(() => {
     if (videoRef.current && videoRef.current.srcObject) {
@@ -151,6 +199,12 @@ const Scanner: React.FC = () => {
       const reader = new FileReader();
       reader.onload = (e) => {
         setCapturedImage(e.target?.result as string);
+        setUploadError(false);
+        analyticsHook.trackUploadUsage(file.size, file.type, true);
+      };
+      reader.onerror = () => {
+        setUploadError(true);
+        analyticsHook.trackUploadUsage(file.size, file.type, false);
       };
       reader.readAsDataURL(file);
     }
@@ -159,16 +213,50 @@ const Scanner: React.FC = () => {
   const processImage = async () => {
     if (!capturedImage) return;
     
+    const startTime = Date.now();
     setIsProcessing(true);
+    setError(null);
     
     try {
-      // This will be implemented in Day 3-4
-      // For now, just simulate processing
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      alert('Image processing will be implemented in Day 3! For now, this is just a placeholder.');
-    } catch (error) {
+      let session = await apiService.getSession();
+      if (!session) {
+        session = await apiService.createSession('mobile-scanner');
+      }
+
+      const response = await fetch(capturedImage);
+      const blob = await response.blob();
+      const file = new File([blob], 'bookshelf.jpg', { type: 'image/jpeg' });
+      
+      const uploadResponse = await apiService.uploadImage(file);
+      setUploadId(uploadResponse.uploadId);
+      
+      const analysisResponse = await apiService.analyzeImage(uploadResponse.uploadId);
+      const processingTime = Date.now() - startTime;
+      
+      if (analysisResponse.success && analysisResponse.books.length > 0) {
+        setDetectedBooks(analysisResponse.books);
+        setAnalysisComplete(true);
+        
+        const avgConfidence = analysisResponse.books.reduce((sum, book) => sum + book.confidence, 0) / analysisResponse.books.length;
+        analyticsHook.trackBookshelfScan({
+          imageSize: blob.size,
+          processingTime,
+          booksDetected: analysisResponse.books.length,
+          confidence: avgConfidence
+        });
+      } else {
+        setError('No books detected in the image. Please try a clearer photo with visible book spines.');
+        analyticsHook.trackBookshelfScan({
+          imageSize: blob.size,
+          processingTime,
+          booksDetected: 0
+        });
+      }
+      
+    } catch (error: any) {
       console.error('Error processing image:', error);
-      alert('Error processing image. Please try again.');
+      setError(error.response?.data?.error || 'Failed to process image. Please try again.');
+      analyticsHook.trackError('image_processing_failed', { error: error.message });
     } finally {
       setIsProcessing(false);
     }
@@ -176,8 +264,36 @@ const Scanner: React.FC = () => {
 
   const retakePhoto = () => {
     setCapturedImage(null);
+    setDetectedBooks([]);
+    setUploadId(null);
+    setError(null);
+    setAnalysisComplete(false);
     startCamera();
   };
+
+  const proceedToRecommendations = () => {
+    if (uploadId && detectedBooks.length > 0) {
+      navigate('/recommendations', { 
+        state: { 
+          uploadId, 
+          detectedBooks,
+          capturedImage 
+        } 
+      });
+    }
+  };
+
+  // Auto-focus improvements for mobile
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && isStreaming) {
+        stopCamera();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isStreaming, stopCamera]);
 
   return (
     <Container>
@@ -191,6 +307,49 @@ const Scanner: React.FC = () => {
         Take a clear photo of a bookshelf with visible book spines, 
         or upload an existing photo from your device.
       </Instructions>
+
+      {/* Error Handling */}
+      {cameraError && (
+        <CameraError
+          onTryUpload={() => fileInputRef.current?.click()}
+          onRetryCamera={() => {
+            setCameraError(false);
+            startCamera();
+          }}
+        />
+      )}
+      
+      {uploadError && (
+        <UploadError
+          onRetry={() => fileInputRef.current?.click()}
+          onChooseAnother={() => {
+            setUploadError(false);
+            fileInputRef.current?.click();
+          }}
+        />
+      )}
+      
+      {error && !cameraError && !uploadError && (
+        detectedBooks.length === 0 && analysisComplete ? (
+          <NoBooksFoundError
+            onRetakePhoto={retakePhoto}
+            onViewTips={() => {
+              // Could navigate to tips page or show modal
+            }}
+          />
+        ) : (
+          <AnalysisError
+            onRetry={processImage}
+            onTryDifferentPhoto={retakePhoto}
+          />
+        )
+      )}
+      
+      {analysisComplete && detectedBooks.length > 0 && (
+        <SuccessMessage>
+          🎉 Found {detectedBooks.length} books! Ready for recommendations.
+        </SuccessMessage>
+      )}
 
       <CameraContainer>
         {capturedImage ? (
@@ -212,15 +371,59 @@ const Scanner: React.FC = () => {
         <Canvas ref={canvasRef} />
       </CameraContainer>
 
+      {/* Loading Overlay */}
+      <LoadingOverlay
+        isVisible={isProcessing}
+        title="🔍 Analyzing your bookshelf..."
+        subtitle="Using AI to detect book spines and extract titles"
+      />
+
+      {detectedBooks.length > 0 && (
+        <BooksList>
+          <h3 style={{ margin: '0 0 1rem 0', color: '#2d3748' }}>
+            📚 Detected Books ({detectedBooks.length})
+          </h3>
+          {detectedBooks.map((book, index) => (
+            <BookItem key={index}>
+              <BookInfo>
+                <BookTitle>{book.title}</BookTitle>
+                <BookAuthor>by {book.author}</BookAuthor>
+                {book.genre && (
+                  <div style={{ color: '#667eea', fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                    {book.genre}
+                  </div>
+                )}
+              </BookInfo>
+              <ConfidenceBadge confidence={book.confidence}>
+                {Math.round(book.confidence * 100)}%
+              </ConfidenceBadge>
+            </BookItem>
+          ))}
+        </BooksList>
+      )}
+
       <ButtonRow>
         {capturedImage ? (
           <>
-            <Button onClick={processImage} disabled={isProcessing}>
-              {isProcessing ? 'Processing...' : '🔍 Analyze Books'}
-            </Button>
-            <Button variant="secondary" onClick={retakePhoto}>
-              📷 Retake Photo
-            </Button>
+            {analysisComplete && detectedBooks.length > 0 ? (
+              <>
+                <Button onClick={proceedToRecommendations}>
+                  🎯 Get Recommendations
+                </Button>
+                <Button variant="secondary" onClick={retakePhoto}>
+                  📷 Retake Photo
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button onClick={processImage} disabled={isProcessing}>
+                  {isProcessing ? 'Analyzing...' : '🔍 Analyze Books'}
+                </Button>
+                <Button variant="secondary" onClick={retakePhoto}>
+                  📷 Retake Photo
+                </Button>
+              </>
+            )}
           </>
         ) : isStreaming ? (
           <>
