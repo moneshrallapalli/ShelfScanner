@@ -4,9 +4,43 @@ const { generateSessionId, createSession, getSession, updateLastActivity } = req
 const rateLimit = require('../middleware/rateLimitMiddleware');
 
 // Apply rate limiting to all session routes
-router.use(rateLimit);
+router.use(rateLimit.auth);
 
-// Create new session (device-based)
+// Create new session - main endpoint that frontend calls
+router.post('/', async (req, res) => {
+  try {
+    const { device } = req.body;
+    
+    // Create device info from request
+    const deviceInfo = {
+      userAgent: req.get('User-Agent') || 'unknown',
+      platform: device || 'web-client',
+      screenResolution: 'unknown',
+      timezone: 'unknown',
+      language: req.get('Accept-Language') || 'en'
+    };
+
+    const sessionId = generateSessionId();
+    const session = await createSession(sessionId, deviceInfo);
+    
+    // Store session in express-session
+    req.session.deviceSessionId = sessionId;
+    req.session.save();
+    
+    res.status(201).json({
+      success: true,
+      sessionId: sessionId,
+      deviceId: device || 'web-client',
+      createdAt: session.created_at,
+      expiresAt: session.expires_at
+    });
+  } catch (error) {
+    console.error('Session creation error:', error);
+    res.status(500).json({ error: 'Failed to create session' });
+  }
+});
+
+// Create new session (device-based) - alternative endpoint
 router.post('/create', async (req, res) => {
   try {
     const { deviceInfo } = req.body;
@@ -30,6 +64,38 @@ router.post('/create', async (req, res) => {
   } catch (error) {
     console.error('Session creation error:', error);
     res.status(500).json({ error: 'Failed to create session' });
+  }
+});
+
+// Get session by ID
+router.get('/:sessionId', async (req, res) => {
+  try {
+    const sessionId = req.params.sessionId;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Session ID required' });
+    }
+
+    const session = await getSession(sessionId);
+    
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found or expired' });
+    }
+
+    // Update last activity
+    await updateLastActivity(sessionId);
+    
+    res.json({
+      session: {
+        sessionId: session.session_id,
+        deviceId: session.device_info.platform,
+        createdAt: session.created_at,
+        expiresAt: session.expires_at
+      }
+    });
+  } catch (error) {
+    console.error('Session retrieval error:', error);
+    res.status(500).json({ error: 'Failed to retrieve session' });
   }
 });
 

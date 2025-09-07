@@ -15,7 +15,9 @@
       "Bash(PORT=3001 npm start)",
       "Read(/Users/monesh/Documents/ss/**)",
       "Bash(lsof:*)",
-      "Read(/Users/monesh/Desktop/**)"
+      "Read(/Users/monesh/Desktop/**)",
+      "Bash(chmod:*)",
+      "Read(/var/folders/0c/2ct_0vld0j71f26xzzqly_fc0000gn/T/TemporaryItems/NSIRD_screencaptureui_k8iI42/**)"
     ],
     "deny": [],
     "ask": []

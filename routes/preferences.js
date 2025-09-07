@@ -1,20 +1,45 @@
 const express = require('express');
 const router = express.Router();
-const { getSession } = require('../utils/sessionUtils');
+const { getSession, generateSessionId, createSession } = require('../utils/sessionUtils');
 
 // Get user preferences
 router.get('/', async (req, res) => {
   try {
-    const sessionId = req.session.deviceSessionId;
+    let sessionId = req.session.deviceSessionId;
+    let session = null;
     
+    // If no session exists, create one
     if (!sessionId) {
-      return res.status(401).json({ error: 'No active session' });
-    }
-
-    const session = await getSession(sessionId);
-    
-    if (!session) {
-      return res.status(401).json({ error: 'Invalid session' });
+      sessionId = generateSessionId();
+      const deviceInfo = {
+        userAgent: req.get('User-Agent') || 'unknown',
+        platform: 'web-preferences',
+        screenResolution: 'unknown',
+        timezone: 'unknown',
+        language: req.get('Accept-Language') || 'en'
+      };
+      
+      session = await createSession(sessionId, deviceInfo);
+      req.session.deviceSessionId = sessionId;
+      req.session.save();
+    } else {
+      session = await getSession(sessionId);
+      
+      // If session is invalid, create a new one
+      if (!session) {
+        sessionId = generateSessionId();
+        const deviceInfo = {
+          userAgent: req.get('User-Agent') || 'unknown',
+          platform: 'web-preferences',
+          screenResolution: 'unknown',
+          timezone: 'unknown',
+          language: req.get('Accept-Language') || 'en'
+        };
+        
+        session = await createSession(sessionId, deviceInfo);
+        req.session.deviceSessionId = sessionId;
+        req.session.save();
+      }
     }
 
     // Enhanced preferences structure for Day 4
@@ -86,16 +111,22 @@ router.get('/', async (req, res) => {
 // Update user preferences
 router.put('/', async (req, res) => {
   try {
-    const sessionId = req.session.deviceSessionId;
+    let sessionId = req.session.deviceSessionId;
     
+    // Create session if it doesn't exist
     if (!sessionId) {
-      return res.status(401).json({ error: 'No active session' });
-    }
-
-    const session = await getSession(sessionId);
-    
-    if (!session) {
-      return res.status(401).json({ error: 'Invalid session' });
+      sessionId = generateSessionId();
+      const deviceInfo = {
+        userAgent: req.get('User-Agent') || 'unknown',
+        platform: 'web-preferences-update',
+        screenResolution: 'unknown',
+        timezone: 'unknown',
+        language: req.get('Accept-Language') || 'en'
+      };
+      
+      await createSession(sessionId, deviceInfo);
+      req.session.deviceSessionId = sessionId;
+      req.session.save();
     }
 
     const { preferences } = req.body;
@@ -324,10 +355,22 @@ router.post('/goals', async (req, res) => {
 // Quick preference setup for new users
 router.post('/quick-setup', async (req, res) => {
   try {
-    const sessionId = req.session.deviceSessionId;
+    let sessionId = req.session.deviceSessionId;
     
+    // Create session if it doesn't exist
     if (!sessionId) {
-      return res.status(401).json({ error: 'No active session' });
+      sessionId = generateSessionId();
+      const deviceInfo = {
+        userAgent: req.get('User-Agent') || 'unknown',
+        platform: 'web-quick-setup',
+        screenResolution: 'unknown',
+        timezone: 'unknown',
+        language: req.get('Accept-Language') || 'en'
+      };
+      
+      await createSession(sessionId, deviceInfo);
+      req.session.deviceSessionId = sessionId;
+      req.session.save();
     }
 
     const {
