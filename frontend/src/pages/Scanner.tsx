@@ -1,6 +1,7 @@
 import React, { useRef, useState, useCallback, useEffect } from 'react';
 import styled from 'styled-components';
 import { useNavigate } from 'react-router-dom';
+import { Camera as ReactCamera } from 'react-camera-pro';
 import { apiService, Book } from '../services/api';
 import Button from '../components/UI/Button';
 import { FullPageLoading, LoadingOverlay } from '../components/UI/LoadingStates';
@@ -32,20 +33,16 @@ const CameraContainer = styled.div`
   border-radius: 12px;
   margin: 1rem 0;
   min-height: 400px;
-`;
+  overflow: hidden;
 
-const Video = styled.video`
-  width: 100%;
-  max-width: 400px;
-  height: auto;
-  aspect-ratio: 4 / 3;
-  border-radius: 8px;
-  background: #000;
-  object-fit: cover;
-`;
-
-const Canvas = styled.canvas`
-  display: none;
+  .react-camera-pro {
+    width: 100%;
+    max-width: 400px;
+    height: auto;
+    aspect-ratio: 4 / 3;
+    border-radius: 8px;
+    overflow: hidden;
+  }
 `;
 
 const CapturedImage = styled.img`
@@ -130,10 +127,9 @@ const ConfidenceBadge = styled.span<{ confidence: number }>`
 
 const Scanner: React.FC = () => {
   const navigate = useNavigate();
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const cameraRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   const [isStreaming, setIsStreaming] = useState(false);
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -143,58 +139,14 @@ const Scanner: React.FC = () => {
   const [analysisComplete, setAnalysisComplete] = useState(false);
   const [cameraError, setCameraError] = useState(false);
   const [uploadError, setUploadError] = useState(false);
-  
+
   const analyticsHook = useAnalytics();
 
   const startCamera = useCallback(async () => {
     try {
       console.log('🎥 Starting camera...');
-
-      // Request camera access
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'environment',
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
-
-      console.log('✅ Camera stream obtained');
-
-      // FIRST: Set streaming state to render video element
       setIsStreaming(true);
       setCameraError(false);
-      console.log('🎬 State updated: isStreaming=true, video element should render now');
-
-      // SECOND: Wait for video element to be rendered, then attach stream
-      setTimeout(() => {
-        console.log('⏱️ Timeout: video element should be rendered now');
-        console.log('🔍 Checking videoRef.current:', videoRef.current);
-
-        if (videoRef.current) {
-          console.log('📹 Video element found! Attaching stream...');
-          videoRef.current.srcObject = stream;
-          console.log('✅ Stream attached to video element');
-
-          // Try to play
-          const playPromise = videoRef.current.play();
-          console.log('🎥 Play called, promise:', playPromise);
-
-          playPromise
-            .then(() => {
-              console.log('▶️ Video playing successfully!');
-            })
-            .catch(err => {
-              console.error('❌ Error playing video:', err);
-            });
-        } else {
-          console.error('❌ ERROR: videoRef.current is still null!');
-          setCameraError(true);
-          setIsStreaming(false);
-        }
-      }, 100);
-
       analyticsHook.trackCameraUsage(true);
     } catch (err) {
       console.error('❌ Camera error:', err);
@@ -205,40 +157,19 @@ const Scanner: React.FC = () => {
   }, [analyticsHook]);
 
   const stopCamera = useCallback(() => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = (videoRef.current.srcObject as MediaStream).getTracks();
-      tracks.forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-      setIsStreaming(false);
-    }
+    setIsStreaming(false);
   }, []);
 
   const capturePhoto = useCallback(() => {
-    if (videoRef.current && canvasRef.current) {
-      const canvas = canvasRef.current;
-      const video = videoRef.current;
-
-      // Ensure video has dimensions
-      if (video.videoWidth === 0 || video.videoHeight === 0) {
-        alert('Camera is not ready yet. Please wait a moment and try again.');
-        return;
-      }
-
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        try {
-          ctx.drawImage(video, 0, 0);
-          const imageData = canvas.toDataURL('image/jpeg', 0.8);
-          setCapturedImage(imageData);
-          stopCamera();
-          console.log('✅ Photo captured successfully');
-        } catch (error) {
-          console.error('Error capturing photo:', error);
-          alert('Failed to capture photo. Please try again.');
-        }
+    if (cameraRef.current) {
+      try {
+        const photo = cameraRef.current.takePhoto();
+        console.log('✅ Photo captured successfully');
+        setCapturedImage(photo);
+        stopCamera();
+      } catch (error) {
+        console.error('Error capturing photo:', error);
+        alert('Failed to capture photo. Please try again.');
       }
     } else {
       alert('Camera reference not available. Please start camera first.');
@@ -407,11 +338,17 @@ const Scanner: React.FC = () => {
         {capturedImage ? (
           <CapturedImage src={capturedImage} alt="Captured bookshelf" />
         ) : isStreaming ? (
-          <Video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
+          <ReactCamera
+            ref={cameraRef}
+            aspectRatio={4 / 3}
+            facingMode="environment"
+            errorMessages={{
+              noCameraAccessible: 'No camera device found',
+              permissionDenied: 'Permission to access camera denied',
+              switchCamera:
+                'It is not possible to switch camera to different one because there is only one camera connected.',
+              canvas: 'Canvas is not supported.',
+            }}
           />
         ) : (
           <div style={{ textAlign: 'center', color: '#718096' }}>
@@ -419,8 +356,6 @@ const Scanner: React.FC = () => {
             <p>Camera not started</p>
           </div>
         )}
-        
-        <Canvas ref={canvasRef} />
       </CameraContainer>
 
       {/* Loading Overlay */}

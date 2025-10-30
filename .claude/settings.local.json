@@ -21,7 +21,10 @@
       "Bash(cloc:*)",
       "Bash(cat:*)",
       "Bash(awk '{print $9, \"\"\"\"(\"\"\"\" $5 \"\"\"\")\"\"\"\"}')",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "WebFetch(domain:www.shelfscanner.io)",
+      "Bash(pkill:*)",
+      "Read(//private/tmp/**)"
     ],
     "deny": [],
     "ask": []
