@@ -37,8 +37,11 @@ const CameraContainer = styled.div`
 const Video = styled.video`
   width: 100%;
   max-width: 400px;
+  height: auto;
+  aspect-ratio: 4 / 3;
   border-radius: 8px;
   background: #000;
+  object-fit: cover;
 `;
 
 const Canvas = styled.canvas`
@@ -145,24 +148,59 @@ const Scanner: React.FC = () => {
 
   const startCamera = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: { 
+      console.log('🎥 Starting camera...');
+
+      // Request camera access
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
           facingMode: 'environment',
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        } 
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
       });
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsStreaming(true);
-        setCameraError(false);
-        analyticsHook.trackCameraUsage(true);
-      }
+
+      console.log('✅ Camera stream obtained');
+
+      // FIRST: Set streaming state to render video element
+      setIsStreaming(true);
+      setCameraError(false);
+      console.log('🎬 State updated: isStreaming=true, video element should render now');
+
+      // SECOND: Wait for video element to be rendered, then attach stream
+      setTimeout(() => {
+        console.log('⏱️ Timeout: video element should be rendered now');
+        console.log('🔍 Checking videoRef.current:', videoRef.current);
+
+        if (videoRef.current) {
+          console.log('📹 Video element found! Attaching stream...');
+          videoRef.current.srcObject = stream;
+          console.log('✅ Stream attached to video element');
+
+          // Try to play
+          const playPromise = videoRef.current.play();
+          console.log('🎥 Play called, promise:', playPromise);
+
+          playPromise
+            .then(() => {
+              console.log('▶️ Video playing successfully!');
+            })
+            .catch(err => {
+              console.error('❌ Error playing video:', err);
+            });
+        } else {
+          console.error('❌ ERROR: videoRef.current is still null!');
+          setCameraError(true);
+          setIsStreaming(false);
+        }
+      }, 100);
+
+      analyticsHook.trackCameraUsage(true);
     } catch (err) {
-      console.error('Error accessing camera:', err);
+      console.error('❌ Camera error:', err);
       setCameraError(true);
-      analyticsHook.trackCameraUsage(false, err instanceof Error ? err.name : 'UnknownError');
+      setIsStreaming(false);
+      analyticsHook.trackCameraUsage(false, err instanceof Error ? err.message : 'Unknown error');
     }
   }, [analyticsHook]);
 
@@ -179,17 +217,31 @@ const Scanner: React.FC = () => {
     if (videoRef.current && canvasRef.current) {
       const canvas = canvasRef.current;
       const video = videoRef.current;
-      
+
+      // Ensure video has dimensions
+      if (video.videoWidth === 0 || video.videoHeight === 0) {
+        alert('Camera is not ready yet. Please wait a moment and try again.');
+        return;
+      }
+
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      
+
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(video, 0, 0);
-        const imageData = canvas.toDataURL('image/jpeg', 0.8);
-        setCapturedImage(imageData);
-        stopCamera();
+        try {
+          ctx.drawImage(video, 0, 0);
+          const imageData = canvas.toDataURL('image/jpeg', 0.8);
+          setCapturedImage(imageData);
+          stopCamera();
+          console.log('✅ Photo captured successfully');
+        } catch (error) {
+          console.error('Error capturing photo:', error);
+          alert('Failed to capture photo. Please try again.');
+        }
       }
+    } else {
+      alert('Camera reference not available. Please start camera first.');
     }
   }, [stopCamera]);
 

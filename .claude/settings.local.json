@@ -17,7 +17,11 @@
       "Bash(lsof:*)",
       "Read(/Users/monesh/Desktop/**)",
       "Bash(chmod:*)",
-      "Read(/var/folders/0c/2ct_0vld0j71f26xzzqly_fc0000gn/T/TemporaryItems/NSIRD_screencaptureui_k8iI42/**)"
+      "Read(/var/folders/0c/2ct_0vld0j71f26xzzqly_fc0000gn/T/TemporaryItems/NSIRD_screencaptureui_k8iI42/**)",
+      "Bash(cloc:*)",
+      "Bash(cat:*)",
+      "Bash(awk '{print $9, \"\"\"\"(\"\"\"\" $5 \"\"\"\")\"\"\"\"}')",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": []
